@@ -1,0 +1,3 @@
+*.pyrr
+*.pyr
+__pycache__

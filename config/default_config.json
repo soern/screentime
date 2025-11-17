@@ -1,0 +1,70 @@
+{
+  "allowlist": [
+    "code",
+    "gedit",
+    "libreoffice",
+    "wikipedia"
+  ],
+  "denylist": [
+    "youtube",
+    "chrome",
+    "discord",
+    "steam",
+    "minecraft",
+    "sober",
+    "(flightgear|fgfs)"
+  ],
+  "daily_limit": 4800,
+  "weekday_limits": {
+    "monday": 4800,
+    "tuesday": 4800,
+    "wednesday": 4800,
+    "thursday": 4800,
+    "friday": 7200,
+    "saturday": 7200,
+    "sunday": 4800
+  },
+  "rest_times": {
+    "monday": {
+      "morning": {"start": "00:00", "end": "08:00"},
+      "evening": {"start": "18:30", "end": "23:59"}
+    },
+    "tuesday": {
+      "morning": {"start": "00:00", "end": "08:00"},
+      "evening": {"start": "18:30", "end": "23:59"}
+    },
+    "wednesday": {
+      "morning": {"start": "00:00", "end": "08:00"},
+      "evening": {"start": "18:30", "end": "23:59"}
+    },
+    "thursday": {
+      "morning": {"start": "00:00", "end": "08:00"},
+      "evening": {"start": "18:30", "end": "23:59"}
+    },
+    "friday": {
+      "morning": {"start": "00:00", "end": "08:00"},
+      "evening": {"start": "21:00", "end": "23:59"}
+    },
+    "saturday": {
+      "morning": {"start": "00:00", "end": "08:00"},
+      "evening": {"start": "21:00", "end": "23:59"}
+    },
+    "sunday": {
+      "morning": {"start": "00:00", "end": "08:00"},
+      "evening": {"start": "18:30", "end": "23:59"}
+    }
+  },
+  "holiday_seasons": [
+    {
+      "name": "Summer Holidays",
+      "start_date": "2024-07-01",
+      "end_date": "2024-08-31",
+      "extended_rest_morning": {"start": "00:00", "end": "10:00"},
+      "extended_rest_evening": {"start": "20:00", "end": "23:59"},
+      "extended_limit_multiplier": 1.5
+    }
+  ],
+  "tracking_interval": 1,
+  "data_directory": "~/.screentime"
+}
+
