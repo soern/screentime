@@ -18,6 +18,20 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 from utils.strings import sanitize_string
 from utils.system import drop_privileges, configure_user_environment
+from utils.ipc import (
+    SocketServer,
+    get_socket_path,
+    send_socket_command,
+    query_socket_logs,
+)
 
-__all__ = ['sanitize_string', 'drop_privileges', 'configure_user_environment']
+__all__ = [
+    'sanitize_string',
+    'drop_privileges',
+    'configure_user_environment',
+    'SocketServer',
+    'get_socket_path',
+    'send_socket_command',
+    'query_socket_logs',
+]
 

@@ -228,6 +228,47 @@ class TimeTracker:
             # Ensure timestamp advances even if elapsed is extremely small/zero
             self.last_progress_time = now
 
+    def _check_new_day(self) -> bool:
+        """
+        Check if the date has changed and roll over today's data if needed.
+        
+        Returns:
+            True if the day was reset, False otherwise
+        """
+        current_date = self.today_data.get("date")
+        today_str = date.today().isoformat()
+        
+        if current_date == today_str:
+            return False
+        
+        logger.info(f"New day detected (previous data date: {current_date}, current date: {today_str}). Rolling over usage data.")
+        
+        # End current session to record final usage for previous day
+        if self.current_app is not None:
+            try:
+                self._end_current_session()
+            except Exception as e:
+                logger.error(f"Error ending session during day rollover: {e}", exc_info=True)
+        
+        # Ensure today's data is saved and history updated
+        try:
+            self._save_today_data(force=True)
+        except Exception as e:
+            logger.error(f"Error saving daily data during day rollover: {e}", exc_info=True)
+        
+        try:
+            self.save_history()
+        except Exception as e:
+            logger.error(f"Error saving history during day rollover: {e}", exc_info=True)
+        
+        # Load fresh data for the new day
+        self.today_data = self._load_today_data()
+        self.current_app = None
+        self.current_start_time = None
+        self.last_progress_time = None
+        
+        return True
+    
     def start_tracking(self, app_name: str, window_title: str):
         """
         Start tracking an application.
@@ -236,14 +277,12 @@ class TimeTracker:
             app_name: Application name
             window_title: Full window title
         """
+        # Ensure we are tracking the correct day
+        self._check_new_day()
+        
         # If switching apps, record previous session
         if self.current_app is not None and self.current_app != app_name:
             self._end_current_session()
-        
-        # Check if we need to reset for new day
-        today = date.today()
-        if self.today_data.get("date") != today.isoformat():
-            self.today_data = self._load_today_data()
         
         self.current_app = app_name
         self.current_start_time = time_module.time()
@@ -287,12 +326,15 @@ class TimeTracker:
             app_name: Application name
             window_title: Full window title
         """
+        # Check for day rollover before recording progress
+        day_reset = self._check_new_day()
+        
         # Record progress for the currently active session
         self._record_progress()
-
+        
         # Continue tracking - rest time only affects whether usage counts towards limit,
         # not whether we track it
-        if app_name != self.current_app:
+        if day_reset or self.current_app is None or app_name != self.current_app:
             self.start_tracking(app_name, window_title)
     
     def get_current_usage(self) -> Tuple[int, int]:

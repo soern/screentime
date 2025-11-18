@@ -285,13 +285,25 @@ class X11Monitor:
         
         return None
     
+    def get_window_pid(self, win_id: Optional[int], app_name: Optional[str] = None) -> Optional[int]:
+        """
+        Resolve the process ID for a window, falling back to name-based lookup if needed.
+        """
+        pid = self._get_window_pid(win_id)
+        
+        if not pid and app_name:
+            pid = self._find_pid_by_name(app_name)
+            if pid:
+                logger.debug(f"Found PID {pid} for {app_name} using fallback method")
+        
+        return pid
+    
     def get_active_window(self) -> Optional[Tuple[str, str, Optional[int]]]:
         """
-        Get the currently active window information including process ID.
+        Get the currently active window information.
         
         Returns:
-            Tuple of (application_name, window_title, pid) or None if unable to determine.
-            pid may be None if the window doesn't have _NET_WM_PID set.
+            Tuple of (application_name, window_title, window_id) or None if unable to determine.
         """
         try:
             # Get active window ID
@@ -311,21 +323,12 @@ class X11Monitor:
             if not app_name:
                 app_name = self._extract_app_name(window_title)
             
-            # Get process ID
-            pid = self._get_window_pid(win_id)
-            
-            # If PID is invalid or None, try fallback method
-            if not pid and app_name:
-                pid = self._find_pid_by_name(app_name)
-                if pid:
-                    logger.debug(f"Found PID {pid} for {app_name} using fallback method")
-            
             # Cache the result
             self._last_win_id = win_id
             self._last_title = window_title
             self._last_window = app_name
             
-            return (app_name, window_title, pid)
+            return (app_name, window_title, win_id)
             
         except Exception as e:
             logger.debug(f"Error getting active window: {e}")

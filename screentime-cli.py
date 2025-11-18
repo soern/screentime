@@ -21,6 +21,11 @@ import argparse
 import logging
 from pathlib import Path
 
+# Ensure project root is on sys.path for direct execution
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from policy.config_manager import ConfigManager
 from core.tracker import TimeTracker
 from utils.ipc import get_socket_path, send_socket_command, query_socket_logs

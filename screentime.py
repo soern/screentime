@@ -28,6 +28,11 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
+# Ensure project root is on sys.path for direct execution
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from policy.config_manager import ConfigManager
 from core.tracker import TimeTracker
 from core.monitor import X11Monitor
@@ -138,11 +143,11 @@ class ScreenTimeTracker:
                     break
                 
                 if window_info:
-                    app_name, window_title, pid = window_info
+                    app_name, window_title, win_id = window_info
                     
                     # Only update if window changed
                     if app_name != last_window:
-                        logger.debug(f"Active window: {app_name} - {window_title} (PID: {pid})")
+                        logger.debug(f"Active window: {app_name} - {window_title}")
                         last_window = app_name
                     
                     # Update tracker
@@ -163,9 +168,13 @@ class ScreenTimeTracker:
                             should_kill = True
                             reason = "daily limit exceeded"
                     
-                    if should_kill and pid:
-                        logger.debug(f"Killing {app_name} (PID: {pid}) because {reason}")
-                        self.process_manager.kill_process(pid, app_name, reason)
+                    if should_kill:
+                        pid = self.monitor.get_window_pid(win_id, app_name)
+                        if pid:
+                            logger.debug(f"Killing {app_name} (PID: {pid}) because {reason}")
+                            self.process_manager.kill_process(pid, app_name, reason)
+                        else:
+                            logger.warning(f"Could not determine PID for {app_name}, skipping kill request ({reason})")
                     
                     # Log limit exceeded status
                     if stats["limit_exceeded"] and not self.config_manager.is_allowlisted(app_name):
