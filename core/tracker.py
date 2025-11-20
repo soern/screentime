@@ -118,25 +118,45 @@ class TimeTracker:
         
         return normalized
     
-    def _load_today_data(self) -> Dict:
-        """Load today's usage data."""
-        data_file = self._get_data_file_path()
+    def _load_today_data(self, target_date: Optional[date] = None) -> Dict:
+        """Load usage data for the specified date (defaults to today)."""
+        if target_date is None:
+            target_date = date.today()
+        target_date_str = target_date.isoformat()
+        data_file = self._get_data_file_path(target_date)
         
         if data_file.exists():
             try:
                 with open(data_file, 'r') as f:
                     raw_data = json.load(f)
-                    # Normalize the data to ensure all required keys exist
-                    return self._normalize_today_data(raw_data)
+                    normalized = self._normalize_today_data(raw_data)
+                    stored_date = normalized.get("date")
+                    if stored_date != target_date_str:
+                        logger.warning(
+                            "Data file %s reports date %s instead of %s. "
+                            "Creating fresh usage data for the target day.",
+                            data_file,
+                            stored_date,
+                            target_date_str,
+                        )
+                        return {
+                            "date": target_date_str,
+                            "denylisted_usage": {},
+                            "allowlisted_usage": {},
+                            "total_denylisted": 0,
+                            "sessions": [],
+                        }
+                    normalized["date"] = target_date_str
+                    return normalized
             except (json.JSONDecodeError, IOError) as e:
-                logger.warning(f"Error loading data file: {e}")
+                logger.warning(f"Error loading data file {data_file}: {e}")
         
         return {
-            "date": date.today().isoformat(),
-            "denylisted_usage": {},  # app_name -> seconds
-            "allowlisted_usage": {},  # app_name -> seconds
+            "date": target_date_str,
+            "denylisted_usage": {},
+            "allowlisted_usage": {},
             "total_denylisted": 0,
-            "sessions": []  # List of usage sessions
+            "sessions": [],
         }
     
     def _save_today_data(self, force: bool = False):
@@ -152,7 +172,20 @@ class TimeTracker:
         if not force and (current_time - self.last_data_save) < self.data_save_interval:
             return
         
-        data_file = self._get_data_file_path()
+        data_date_str = self.today_data.get("date")
+        target_date = None
+        if data_date_str:
+            try:
+                target_date = datetime.fromisoformat(data_date_str).date()
+            except ValueError:
+                logger.warning("Invalid date format '%s' in today_data; resetting to today.", data_date_str)
+                target_date = date.today()
+                self.today_data["date"] = target_date.isoformat()
+        else:
+            target_date = date.today()
+            self.today_data["date"] = target_date.isoformat()
+        
+        data_file = self._get_data_file_path(target_date)
         
         try:
             # Save to temporary file first, then rename (atomic operation)

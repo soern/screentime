@@ -171,10 +171,10 @@ class ScreenTimeTracker:
                     if should_kill:
                         pid = self.monitor.get_window_pid(win_id, app_name)
                         if pid:
-                            logger.debug(f"Killing {app_name} (PID: {pid}) because {reason}")
+                            logger.debug(f"Killing {app_name} (PID: {pid}, window: \"{window_title}\") because {reason}")
                             self.process_manager.kill_process(pid, app_name, reason)
                         else:
-                            logger.warning(f"Could not determine PID for {app_name}, skipping kill request ({reason})")
+                            logger.warning(f"Could not determine PID for {app_name} (window: \"{window_title}\"), skipping kill request ({reason})")
                     
                     # Log limit exceeded status
                     if stats["limit_exceeded"] and not self.config_manager.is_allowlisted(app_name):
