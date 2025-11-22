@@ -224,19 +224,14 @@ class TimeTracker:
 
         self._ensure_today_data_keys()
 
-        if self.config.is_allowlisted(app_name):
-            self.today_data["allowlisted_usage"].setdefault(app_name, 0)
-            self.today_data["allowlisted_usage"][app_name] += duration
-        elif self.config.is_denylisted(app_name):
+        if self.config.is_denylisted(app_name):
             self.today_data["denylisted_usage"].setdefault(app_name, 0)
             self.today_data["denylisted_usage"][app_name] += duration
             self.today_data["total_denylisted"] += duration
         else:
-            # Unknown apps count towards limit only when not in rest time
-            if not self.config.is_rest_time():
-                self.today_data["denylisted_usage"].setdefault(app_name, 0)
-                self.today_data["denylisted_usage"][app_name] += duration
-                self.today_data["total_denylisted"] += duration
+            # Apps not in denylist (allowlisted or unknown) count as allowlisted_usage
+            self.today_data["allowlisted_usage"].setdefault(app_name, 0)
+            self.today_data["allowlisted_usage"][app_name] += duration
 
     def _record_progress(self, force: bool = False):
         """
