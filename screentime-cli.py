@@ -155,6 +155,69 @@ def handle_terminate_command(config_path: str = None):
         sys.exit(1)
 
 
+def handle_modify_rest_time_command(config_path: str = None, morning_end: str = None,
+                                    evening_start: str = None):
+    """Handle modify rest time command."""
+    config_manager = ConfigManager(config_path)
+    data_dir = config_manager.get_data_directory()
+    socket_path = get_socket_path(data_dir)
+    
+    # Build command parameters
+    cmd_params = {}
+    if morning_end is not None:
+        cmd_params["morning_end"] = morning_end
+    if evening_start is not None:
+        cmd_params["evening_start"] = evening_start
+    
+    response = send_socket_command(socket_path, "modify_rest_time", **cmd_params)
+    
+    if response.get("status") == "ok":
+        print("Rest time modified successfully")
+        print(f"  Original duration: {response.get('original_duration', 0) // 3600}h {(response.get('original_duration', 0) % 3600) // 60}m")
+        print(f"  New duration: {response.get('new_duration', 0) // 3600}h {(response.get('new_duration', 0) % 3600) // 60}m")
+        print(f"  Original limit: {response.get('original_limit', 0) // 3600}h {(response.get('original_limit', 0) % 3600) // 60}m")
+        print(f"  Adjusted limit: {response.get('adjusted_limit', 0) // 3600}h {(response.get('adjusted_limit', 0) % 3600) // 60}m")
+    else:
+        print(f"Error: {response.get('message', 'Unknown error')}")
+        sys.exit(1)
+
+
+def handle_set_temporary_usage_command(config_path: str = None, minutes: int = None):
+    """Handle set bonus time command."""
+    config_manager = ConfigManager(config_path)
+    data_dir = config_manager.get_data_directory()
+    socket_path = get_socket_path(data_dir)
+    
+    if minutes is None:
+        print("Error: --bonus-time requires a value in minutes")
+        sys.exit(1)
+    
+    response = send_socket_command(socket_path, "set_temporary_usage", minutes=minutes)
+    
+    if response.get("status") == "ok":
+        print("Bonus time adjustment set successfully")
+        base_limit = response.get('base_limit', 0)
+        adjustment_seconds = response.get('adjustment_seconds', 0)
+        adjustment_minutes = response.get('adjustment_minutes', minutes)
+        new_limit = response.get('new_limit', 0)
+        actual = response.get('actual_denylisted', 0)
+        remaining = response.get('remaining', 0)
+        
+        def format_time(secs):
+            hours = secs // 3600
+            mins = (secs % 3600) // 60
+            return f"{hours}h {mins}m"
+        
+        print(f"  Base limit: {format_time(base_limit)}")
+        print(f"  Adjustment: {adjustment_minutes:+d}m ({adjustment_seconds:+d}s)")
+        print(f"  New limit: {format_time(new_limit)}")
+        print(f"  Actual usage: {format_time(actual)}")
+        print(f"  Remaining: {format_time(remaining)}")
+    else:
+        print(f"Error: {response.get('message', 'Unknown error')}")
+        sys.exit(1)
+
+
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -202,6 +265,24 @@ def parse_arguments():
         type=str,
         metavar='USERNAME',
         help='Drop privileges to specified user (requires root privileges)'
+    )
+    parser.add_argument(
+        '--morning-end',
+        type=str,
+        metavar='HH:MM',
+        help='Modify rest time: set morning rest time end (HH:MM format). Evening rest time continues until this time.'
+    )
+    parser.add_argument(
+        '--evening-start',
+        type=str,
+        metavar='HH:MM',
+        help='Modify rest time: set evening rest time start (HH:MM format). Evening rest time continues uninterrupted until morning-end.'
+    )
+    parser.add_argument(
+        '--bonus-time',
+        type=int,
+        metavar='MINUTES',
+        help='Adjust daily denylisted_usage limit for today (in minutes). Positive values add to limit, negative values subtract from it.'
     )
     
     return parser.parse_args()

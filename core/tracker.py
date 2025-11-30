@@ -49,6 +49,8 @@ class TimeTracker:
         self.history_lock = threading.Lock()
         self.last_data_save = time_module.time()
         self.data_save_interval = 30  # Save data file at most every 30 seconds
+        # Suspend detection: track last check time
+        self.last_suspend_check_time = time_module.time()
     
     def _get_data_file_path(self, target_date: Optional[date] = None) -> Path:
         """Get path to data file for given date."""
@@ -115,6 +117,14 @@ class TimeTracker:
             normalized["total_denylisted"] = 0
         if not isinstance(normalized["sessions"], list):
             normalized["sessions"] = []
+        
+        # Preserve rest_time_modification if it exists
+        if "rest_time_modification" in data:
+            normalized["rest_time_modification"] = data["rest_time_modification"]
+        
+        # Preserve temporary_denylisted_usage if it exists
+        if "temporary_denylisted_usage" in data:
+            normalized["temporary_denylisted_usage"] = data["temporary_denylisted_usage"]
         
         return normalized
     
@@ -233,9 +243,40 @@ class TimeTracker:
             self.today_data["allowlisted_usage"].setdefault(app_name, 0)
             self.today_data["allowlisted_usage"][app_name] += duration
 
+    def check_suspend(self) -> bool:
+        """
+        Check if computer was suspended by comparing time delta.
+        Should be called every 10 seconds.
+        
+        Returns:
+            True if suspend was detected, False otherwise
+        """
+        now = time_module.time()
+        elapsed = now - self.last_suspend_check_time
+        
+        # If more than 1 minute has passed, computer was likely suspended
+        SUSPEND_THRESHOLD = 60  # 1 minute in seconds
+        
+        if elapsed > SUSPEND_THRESHOLD:
+            logger.info(
+                f"Suspend detected: {elapsed:.1f}s gap since last check. "
+                f"Time during suspend will not be counted as usage."
+            )
+            # Update last_progress_time to now to skip counting the suspended time
+            if self.last_progress_time is not None:
+                self.last_progress_time = now
+            # Update suspend check time
+            self.last_suspend_check_time = now
+            return True
+        
+        # Update suspend check time
+        self.last_suspend_check_time = now
+        return False
+    
     def _record_progress(self, force: bool = False):
         """
         Record elapsed time for the current session without ending it.
+        Detects computer suspension and skips counting time during suspend.
         """
         if self.current_app is None or self.current_start_time is None:
             return
@@ -246,6 +287,21 @@ class TimeTracker:
 
         elapsed = now - self.last_progress_time
         if elapsed <= 0 and not force:
+            return
+
+        # Detect suspend: if elapsed time is greater than 1 minute, computer was likely suspended
+        # Don't count that time as usage
+        SUSPEND_THRESHOLD = 60  # 1 minute in seconds
+        
+        if elapsed > SUSPEND_THRESHOLD:
+            # Computer was likely suspended - skip counting this time
+            logger.info(
+                f"Suspend detected in progress recording: {elapsed:.1f}s gap detected. "
+                f"Skipping {elapsed:.1f}s of time (not counting as usage)."
+            )
+            # Update last_progress_time to now to avoid accumulating the gap
+            self.last_progress_time = now
+            # Don't increment usage or save data for this gap
             return
 
         if elapsed > 0:
@@ -372,6 +428,7 @@ class TimeTracker:
         Returns:
             Tuple of (denylisted, allowlisted) in seconds
         """
+        # Always calculate actual usage (temporary usage acts as a limit, not usage override)
         denylisted = self.today_data.get("total_denylisted", 0)
         
         # Add current session if tracking (only the portion since last progress)
@@ -399,6 +456,20 @@ class TimeTracker:
     
     def get_remaining_time(self) -> int:
         """Get remaining time in seconds for denylisted apps."""
+        limit = self.get_adjusted_daily_limit()
+        current_usage, _ = self.get_current_usage()
+        remaining = max(0, limit - current_usage)
+        
+        return remaining
+    
+    def get_adjusted_daily_limit(self) -> int:
+        """
+        Get the daily limit adjusted for rest time modifications, holiday multiplier,
+        and temporary usage settings.
+        
+        Returns:
+            Adjusted daily limit in seconds
+        """
         weekday = datetime.now().strftime("%A").lower()
         limit = self.config.get_daily_limit(weekday)
         
@@ -406,10 +477,189 @@ class TimeTracker:
         multiplier = self.config.get_holiday_limit_multiplier()
         limit = int(limit * multiplier)
         
-        current_usage, _ = self.get_current_usage()
-        remaining = max(0, limit - current_usage)
+        # Apply rest time modification if it exists
+        if "rest_time_modification" in self.today_data:
+            modification = self.today_data["rest_time_modification"]
+            if "adjusted_limit" in modification:
+                limit = modification["adjusted_limit"]
         
-        return remaining
+        # Apply temporary usage adjustment (add or subtract from limit)
+        if "temporary_denylisted_usage" in self.today_data:
+            temporary_adjustment = self.today_data["temporary_denylisted_usage"]
+            limit = max(0, limit + temporary_adjustment)  # Ensure limit doesn't go negative
+        
+        return limit
+    
+    def modify_rest_time(self, morning_end: Optional[str] = None,
+                        evening_start: Optional[str] = None) -> Dict:
+        """
+        Modify rest time for the current day and adjust daily limit accordingly.
+        Can only be called once per day.
+        
+        Evening rest time continues uninterrupted until morning_end.
+        
+        Args:
+            morning_end: New morning rest time end (HH:MM format), None to keep current
+            evening_start: New evening rest time start (HH:MM format), None to keep current
+            
+        Returns:
+            Dict with status, message, and details about the modification
+        """
+        # Check if rest time has already been modified today
+        if "rest_time_modification" in self.today_data:
+            return {
+                "status": "error",
+                "message": "Rest time has already been modified for today. Only one modification per day is allowed."
+            }
+        
+        # Get current rest times
+        weekday = datetime.now().strftime("%A").lower()
+        current_rest_times = self.config.get_rest_times(weekday)
+        
+        # Check if in holiday season
+        holiday_rest = self.config._get_holiday_rest_times()
+        if holiday_rest:
+            current_rest_times = holiday_rest
+        
+        # Calculate original rest time duration
+        original_duration = self.config.calculate_rest_time_duration(current_rest_times)
+        
+        # Determine new values
+        new_evening_start = evening_start if evening_start is not None else current_rest_times["evening"]["start"]
+        new_morning_end = morning_end if morning_end is not None else current_rest_times["morning"]["end"]
+        
+        # Evening rest time continues uninterrupted until morning_end
+        # Morning rest time starts at midnight (00:00) and ends at morning_end
+        new_rest_times = {
+            "morning": {
+                "start": "00:00",  # Morning always starts at midnight
+                "end": new_morning_end
+            },
+            "evening": {
+                "start": new_evening_start,
+                "end": new_morning_end  # Evening continues until morning_end
+            }
+        }
+        
+        # Calculate new rest time duration
+        new_duration = self.config.calculate_rest_time_duration(new_rest_times)
+        
+        # Calculate the ratio and adjust daily limit
+        if original_duration > 0:
+            ratio = new_duration / original_duration
+        else:
+            # If original duration is 0, we can't calculate ratio
+            # Just use a default adjustment
+            ratio = 1.0
+        
+        # Get base limit
+        base_limit = self.config.get_daily_limit(weekday)
+        multiplier = self.config.get_holiday_limit_multiplier()
+        current_limit = int(base_limit * multiplier)
+        
+        # Adjust limit proportionally
+        adjusted_limit = int(current_limit * ratio)
+        
+        # Store the modification
+        self.today_data["rest_time_modification"] = {
+            "original_rest_times": current_rest_times.copy(),
+            "new_rest_times": new_rest_times.copy(),
+            "original_duration": original_duration,
+            "new_duration": new_duration,
+            "original_limit": current_limit,
+            "adjusted_limit": adjusted_limit,
+            "ratio": ratio,
+            "modified_at": datetime.now().isoformat()
+        }
+        
+        # Save the data
+        self._save_today_data(force=True)
+        
+        logger.info(
+            f"Rest time modified for today: "
+            f"original duration {original_duration}s, new duration {new_duration}s, "
+            f"limit adjusted from {current_limit}s to {adjusted_limit}s"
+        )
+        
+        return {
+            "status": "ok",
+            "message": "Rest time modified successfully",
+            "original_rest_times": current_rest_times,
+            "new_rest_times": new_rest_times,
+            "original_duration": original_duration,
+            "new_duration": new_duration,
+            "original_limit": current_limit,
+            "adjusted_limit": adjusted_limit,
+            "ratio": ratio
+        }
+    
+    def set_temporary_denylisted_usage(self, minutes: int) -> Dict:
+        """
+        Set a temporary adjustment to the daily denylisted_usage limit for the current day.
+        Positive values add to the limit, negative values subtract from it.
+        Can be set multiple times per day.
+        
+        Args:
+            minutes: The adjustment in minutes (positive to add, negative to subtract)
+            
+        Returns:
+            Dict with status, message, and details about the modification
+        """
+        # Convert minutes to seconds
+        seconds = minutes * 60
+        
+        # Get base limit
+        weekday = datetime.now().strftime("%A").lower()
+        base_limit = self.config.get_daily_limit(weekday)
+        multiplier = self.config.get_holiday_limit_multiplier()
+        base_limit = int(base_limit * multiplier)
+        
+        # Apply rest time modification if it exists
+        if "rest_time_modification" in self.today_data:
+            modification = self.today_data["rest_time_modification"]
+            if "adjusted_limit" in modification:
+                base_limit = modification["adjusted_limit"]
+        
+        # Calculate new adjusted limit
+        new_limit = max(0, base_limit + seconds)  # Ensure limit doesn't go negative
+        
+        # Get current actual usage for reference
+        actual_denylisted = self.today_data.get("total_denylisted", 0)
+        
+        # Add current session if tracking
+        if self.current_app and self.current_start_time:
+            reference_time = self.last_progress_time or self.current_start_time
+            current_duration = max(0, time_module.time() - reference_time)
+            if self.config.is_denylisted(self.current_app):
+                actual_denylisted += current_duration
+            elif not self.config.is_allowlisted(self.current_app):
+                if not self.config.is_rest_time():
+                    actual_denylisted += current_duration
+        
+        # Store the temporary adjustment value (in seconds internally)
+        self.today_data["temporary_denylisted_usage"] = seconds
+        
+        # Save the data
+        self._save_today_data(force=True)
+        
+        logger.info(
+            f"Temporary denylisted_usage adjustment set for today: "
+            f"base limit {base_limit}s ({base_limit // 60}m), "
+            f"adjustment {seconds}s ({minutes}m), "
+            f"new limit {new_limit}s ({new_limit // 60}m), "
+            f"actual usage {actual_denylisted}s ({actual_denylisted // 60}m)"
+        )
+        
+        return {
+            "status": "ok",
+            "message": "Temporary denylisted_usage adjustment set successfully",
+            "base_limit": base_limit,
+            "adjustment_seconds": seconds,
+            "adjustment_minutes": minutes,
+            "new_limit": new_limit,
+            "actual_denylisted": actual_denylisted,
+            "remaining": max(0, new_limit - actual_denylisted)
+        }
     
     def is_limit_exceeded(self) -> bool:
         """Check if daily limit is exceeded."""
@@ -418,10 +668,8 @@ class TimeTracker:
     def get_detailed_stats(self) -> Dict:
         """Get detailed statistics for today."""
         denylisted, allowlisted = self.get_current_usage()
-        weekday = datetime.now().strftime("%A").lower()
-        limit = self.config.get_daily_limit(weekday)
+        adjusted_limit = self.get_adjusted_daily_limit()
         multiplier = self.config.get_holiday_limit_multiplier()
-        adjusted_limit = int(limit * multiplier)
         
         return {
             "date": self.today_data.get("date", date.today().isoformat()),

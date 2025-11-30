@@ -139,6 +139,80 @@ class SocketServer:
                     "status": "error",
                     "message": "Tracker instance not available"
                 }
+        elif cmd == "modify_rest_time" or cmd == "modify_rest":
+            # Modify rest time for today
+            if not self.tracker_instance:
+                return {
+                    "status": "error",
+                    "message": "Tracker instance not available"
+                }
+            
+            # Get the TimeTracker instance
+            time_tracker = getattr(self.tracker_instance, 'tracker', None)
+            if not time_tracker:
+                return {
+                    "status": "error",
+                    "message": "TimeTracker instance not available"
+                }
+            
+            # Get parameters
+            morning_end = command.get("morning_end")
+            evening_start = command.get("evening_start")
+            
+            # Call modify_rest_time
+            result = time_tracker.modify_rest_time(
+                morning_end=morning_end,
+                evening_start=evening_start
+            )
+            
+            return result
+        elif cmd == "set_temporary_usage" or cmd == "set_temp_usage":
+            # Set temporary denylisted_usage for today
+            if not self.tracker_instance:
+                return {
+                    "status": "error",
+                    "message": "Tracker instance not available"
+                }
+            
+            # Get the TimeTracker instance
+            time_tracker = getattr(self.tracker_instance, 'tracker', None)
+            if not time_tracker:
+                return {
+                    "status": "error",
+                    "message": "TimeTracker instance not available"
+                }
+            
+            # Get minutes parameter (accept both "minutes" and "seconds" for backward compatibility)
+            minutes = command.get("minutes")
+            if minutes is None:
+                # Try "seconds" for backward compatibility, but convert to minutes
+                seconds = command.get("seconds")
+                if seconds is not None:
+                    try:
+                        minutes = int(seconds) // 60
+                    except (ValueError, TypeError):
+                        return {
+                            "status": "error",
+                            "message": f"Invalid 'seconds' value: {seconds}. Must be an integer."
+                        }
+                else:
+                    return {
+                        "status": "error",
+                        "message": "Missing 'minutes' parameter"
+                    }
+            
+            try:
+                minutes = int(minutes)
+            except (ValueError, TypeError):
+                return {
+                    "status": "error",
+                    "message": f"Invalid 'minutes' value: {minutes}. Must be an integer."
+                }
+            
+            # Call set_temporary_denylisted_usage (now expects minutes)
+            result = time_tracker.set_temporary_denylisted_usage(minutes)
+            
+            return result
         else:
             return {
                 "status": "error",

@@ -342,4 +342,49 @@ class ConfigManager:
             return (True, next_rest_start)
         
         return (False, next_rest_start)
+    
+    def calculate_rest_time_duration(self, rest_times: Optional[Dict] = None) -> int:
+        """
+        Calculate total rest time duration in seconds for a given rest_times dict.
+        
+        Args:
+            rest_times: Rest times dict with morning/evening start/end. If None, uses current weekday.
+            
+        Returns:
+            Total rest time duration in seconds
+        """
+        if rest_times is None:
+            weekday = datetime.now().strftime("%A").lower()
+            rest_times = self.get_rest_times(weekday)
+            # Check if in holiday season
+            holiday_rest = self._get_holiday_rest_times()
+            if holiday_rest:
+                rest_times = holiday_rest
+        
+        def time_duration_seconds(start_str: str, end_str: str) -> int:
+            """Calculate duration between two time strings in seconds."""
+            start_time = self._parse_time(start_str)
+            end_time = self._parse_time(end_str)
+            
+            # Convert to datetime for today to calculate difference
+            today = datetime.now().date()
+            start_dt = datetime.combine(today, start_time)
+            end_dt = datetime.combine(today, end_time)
+            
+            # Handle case where end is before start (spans midnight)
+            if end_dt < start_dt:
+                end_dt += timedelta(days=1)
+            
+            return int((end_dt - start_dt).total_seconds())
+        
+        morning_duration = time_duration_seconds(
+            rest_times["morning"]["start"],
+            rest_times["morning"]["end"]
+        )
+        evening_duration = time_duration_seconds(
+            rest_times["evening"]["start"],
+            rest_times["evening"]["end"]
+        )
+        
+        return morning_duration + evening_duration
 

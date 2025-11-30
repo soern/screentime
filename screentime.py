@@ -55,6 +55,8 @@ if _cli_module_path.exists():
     show_logs = screentime_cli.show_logs
     handle_reload_command = screentime_cli.handle_reload_command
     handle_terminate_command = screentime_cli.handle_terminate_command
+    handle_modify_rest_time_command = screentime_cli.handle_modify_rest_time_command
+    handle_set_temporary_usage_command = screentime_cli.handle_set_temporary_usage_command
 else:
     raise ImportError(f"Could not find screentime-cli.py at {_cli_module_path}")
 
@@ -68,7 +70,8 @@ class ScreenTimeTracker:
         """Initialize the tracker."""
         self.running = False
         self.config_manager = ConfigManager(config_path)
-        self.monitor = X11Monitor()
+        self.monitor = None  # Lazily connect to X
+        self.monitor_retry_interval = 10  # seconds
         self.data_dir = self.config_manager.get_data_directory()
         self.tracker = TimeTracker(self.data_dir, self.config_manager)
         self.last_history_save = time.time()
@@ -86,6 +89,38 @@ class ScreenTimeTracker:
         # Setup signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+    
+    def _is_permission_error(self, error: Exception) -> bool:
+        """Return True if the error looks like a permission/authentication issue."""
+        if isinstance(error, PermissionError):
+            return True
+        errno = getattr(error, "errno", None)
+        if errno == 13:  # EACCES
+            return True
+        message = str(error).lower()
+        keywords = ("auth", "authoriz", "permission", "access", "denied")
+        return any(keyword in message for keyword in keywords)
+    
+    def initialize_monitor(self) -> bool:
+        """
+        Attempt to connect to the X server.
+        
+        Returns:
+            True if connection succeeded, False if X is unavailable.
+        
+        Raises:
+            PermissionError: When the failure appears to be due to permissions/auth.
+        """
+        try:
+            self.monitor = X11Monitor()
+            logger.info("Connected to X server (DISPLAY=%s)", os.environ.get("DISPLAY"))
+            return True
+        except Exception as exc:
+            self.monitor = None
+            if self._is_permission_error(exc):
+                raise PermissionError(f"Cannot connect to X server: {exc}") from exc
+            logger.warning("Unable to connect to X server (%s)", exc)
+            return False
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
@@ -109,6 +144,8 @@ class ScreenTimeTracker:
         logger.info(f"Denylisted apps: {self.config_manager.config.get('denylist', [])}")
         
         last_window = None
+        last_suspend_check = time.time()
+        suspend_check_interval = 10  # Check for suspend every 10 seconds
         
         try:
             while self.running:
@@ -132,9 +169,37 @@ class ScreenTimeTracker:
                     finally:
                         self.reload_flag.clear()
                 
+                # Ensure monitor connection exists
+                if self.monitor is None:
+                    try:
+                        monitor_ready = self.initialize_monitor()
+                    except PermissionError as e:
+                        logger.error("Permission error connecting to X server: %s", e)
+                        self.running = False
+                        break
+                    
+                    if not monitor_ready:
+                        if daemon:
+                            logger.info(
+                                "X server not available. Retrying in %s seconds...",
+                                self.monitor_retry_interval
+                            )
+                            time.sleep(self.monitor_retry_interval)
+                            continue
+                        else:
+                            logger.error("X server is not available. Exiting.")
+                            self.running = False
+                            break
+                
                 # Check if we're shutting down before doing any work
                 if not self.running:
                     break
+                
+                # Check for suspend every 10 seconds
+                current_time = time.time()
+                if current_time - last_suspend_check >= suspend_check_interval:
+                    self.tracker.check_suspend()
+                    last_suspend_check = current_time
                 
                 window_info = self.monitor.get_active_window()
                 
@@ -236,7 +301,8 @@ class ScreenTimeTracker:
                 
                 # Close X11 connection
                 try:
-                    self.monitor.close()
+                    if self.monitor:
+                        self.monitor.close()
                 except Exception as e:
                     logger.debug(f"Error closing X11 connection: {e}")
 
@@ -253,7 +319,9 @@ def main():
     is_reload_command = bool(args.reload)
     is_terminate_command = bool(args.terminate)
     is_stats_command = bool(args.stats)
-    requires_priv_drop = not (is_logs_command or is_reload_command or is_terminate_command or is_stats_command)
+    is_modify_rest_time_command = args.morning_end is not None or args.evening_start is not None
+    is_set_temporary_usage_command = args.bonus_time is not None
+    requires_priv_drop = not (is_logs_command or is_reload_command or is_terminate_command or is_stats_command or is_modify_rest_time_command or is_set_temporary_usage_command)
     
     # Configure environment or drop privileges based on requested user
     if args.user:
@@ -282,6 +350,23 @@ def main():
         handle_terminate_command(args.config)
         return
     
+    # Handle modify rest time command
+    if is_modify_rest_time_command:
+        handle_modify_rest_time_command(
+            config_path=args.config,
+            morning_end=args.morning_end,
+            evening_start=args.evening_start
+        )
+        return
+    
+    # Handle set bonus time command
+    if is_set_temporary_usage_command:
+        handle_set_temporary_usage_command(
+            config_path=args.config,
+            minutes=args.bonus_time
+        )
+        return
+    
     # Handle logs command
     if is_logs_command:
         show_logs(args.config, args.logs if args.logs > 0 else 100, log_buffer)
@@ -294,6 +379,25 @@ def main():
     
     # Create tracker instance
     tracker = ScreenTimeTracker(args.config)
+    
+    # Attempt initial X connection (to surface permission issues before daemonizing)
+    try:
+        monitor_ready = tracker.initialize_monitor()
+    except PermissionError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    
+    if not monitor_ready:
+        if daemon_mode:
+            logger.warning(
+                "X server not available. Daemon will retry connection every 10 seconds."
+            )
+        else:
+            print(
+                "Error: Cannot connect to X server. Ensure DISPLAY is set and X is running.",
+                file=sys.stderr
+            )
+            sys.exit(1)
     
     # Daemonize if needed
     socket_server = None
